@@ -1,10 +1,10 @@
 package dns
 
 import (
-	"log"
 	"time"
 
 	"github.com/jeessy2/ddns-go/v5/config"
+	"github.com/jeessy2/ddns-go/v5/dns/internal"
 	"github.com/jeessy2/ddns-go/v5/util"
 )
 
@@ -15,12 +15,27 @@ type DNS interface {
 	AddUpdateDomainRecords() (domains config.Domains)
 }
 
-var Ipcache = [][2]util.IpCache{}
+var (
+	addresses = []string{
+		alidnsEndpoint,
+		baiduEndpoint,
+		zonesAPI,
+		recordListAPI,
+		googleDomainEndpoint,
+		huaweicloudEndpoint,
+		nameCheapEndpoint,
+		nameSiloListRecordEndpoint,
+		porkbunEndpoint,
+		tencentCloudEndPoint,
+	}
+
+	Ipcache = [][2]util.IpCache{}
+)
 
 // RunTimer 定时运行
-func RunTimer(firstDelay time.Duration, delay time.Duration) {
-	log.Printf("第一次运行将等待 %d 秒后运行 (等待网络)", int(firstDelay.Seconds()))
-	time.Sleep(firstDelay)
+func RunTimer(delay time.Duration) {
+	internal.WaitForNetworkConnected(addresses)
+
 	for {
 		RunOnce()
 		time.Sleep(delay)
@@ -45,6 +60,8 @@ func RunOnce() {
 		switch dc.DNS.Name {
 		case "alidns":
 			dnsSelected = &Alidns{}
+		case "tencentcloud":
+			dnsSelected = &TencentCloud{}
 		case "dnspod":
 			dnsSelected = &Dnspod{}
 		case "cloudflare":
@@ -63,6 +80,8 @@ func RunOnce() {
 			dnsSelected = &GoogleDomain{}
 		case "namecheap":
 			dnsSelected = &NameCheap{}
+		case "namesilo":
+			dnsSelected = &NameSilo{}
 		default:
 			dnsSelected = &Alidns{}
 		}

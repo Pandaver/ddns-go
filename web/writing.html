@@ -20,7 +20,7 @@
           <strong>DDNS-GO</strong>
         </a>
         <button class="btn btn-info btn-sm" id="logsBtn" onclick="showHideLogs()">日志</button>
-        <span class="theme-button gg-dark-mode" onclick="toggleTheme()"></span>
+        <span class="theme-button gg-dark-mode" onclick="toggleTheme(true)"></span>
         <span class="badge badge-secondary">{{.Version}}</span>
       </div>
     </div>
@@ -267,14 +267,6 @@
             <div class="portlet__body">
 
               <div class="form-group row">
-                <label for="WebhookDisable" class="col-sm-2">是否禁用</label>
-                <div class="col-sm-10">
-                  <input type="checkbox" class="form-check-inline" style="margin-top: 5px;" id="WebhookDisable"
-                    name="WebhookDisable" checked>
-                </div>
-              </div>
-
-              <div class="form-group row">
                 <label for="WebhookURL" class="col-sm-2 col-form-label">URL</label>
                 <div class="col-sm-10">
                   <input class="form-control form" name="WebhookURL" id="WebhookURL" value=""
@@ -293,6 +285,17 @@
                     aria-describedby="WebhookRequestBody_help"></textarea>
                   <small id="WebhookRequestBody_help" class="form-text text-muted">
                     如 RequestBody 为空则为 GET 请求，否则为 POST 请求。支持的变量同上
+                  </small>
+                </div>
+              </div>
+
+              <div class="form-group row">
+                <label for="WebhookHeaders" class="col-sm-2 col-form-label">Headers</label>
+                <div class="col-sm-10">
+                  <textarea class="form-control form" id="WebhookHeaders" name="WebhookHeaders" rows="1"
+                    aria-describedby="WebhookHeaders_help"></textarea>
+                  <small id="WebhookHeaders_help" class="form-text text-muted">
+                    一行一个Header, 如：Authorization: Bearer API_KEY
                   </small>
                 </div>
               </div>
@@ -330,11 +333,18 @@
         helpHtml: "<a target='_blank' href='https://ram.console.aliyun.com/manage/ak?spm=5176.12818093.nav-right.dak.488716d0mHaMgg'>创建 AccessKey</a>"
       },
       {
-        name: 'DnsPod(腾讯云)',
+        name: '腾讯云',
+        id: 'tencentcloud',
+        idLabel: 'SecretId',
+        secretLabel: 'SecretKey',
+        helpHtml: "<a target='_blank' href='https://console.dnspod.cn/account/token/apikey'>创建腾讯云 API 密钥</a>"
+      },
+      {
+        name: 'DnsPod',
         id: 'dnspod',
         idLabel: 'ID',
         secretLabel: 'Token',
-        helpHtml: "<a target='_blank' href='https://console.dnspod.cn/account/token/token'>创建密钥</a>"
+        helpHtml: "<a target='_blank' href='https://console.dnspod.cn/account/token/token'>创建 DNSPod Token</a>"
       },
       {
         name: 'Cloudflare',
@@ -390,7 +400,14 @@
         id: 'namecheap',
         idLabel: '',
         secretLabel: 'Password',
-        helpHtml: "<a target='_blank' href='https://www.namecheap.com/support/knowledgebase/article.aspx/36/11/how-do-i-start-using-dynamic-dns/'>如何开启namecheap动态域名解析</a>"
+        helpHtml: "<a target='_blank' href='https://www.namecheap.com/support/knowledgebase/article.aspx/36/11/how-do-i-start-using-dynamic-dns/'>如何开启namecheap动态域名解析，Namecheap DDNS 不支持更新 IPv6！ </a>"
+      },
+      {
+        name: 'NameSilo',
+        id: 'namesilo',
+        idLabel: '',
+        secretLabel: 'Password',
+        helpHtml: "<a target='_blank' href='https://www.namesilo.com/account/api-manager'>开启namesilo动态域名解析。请注意namesilo的TTL最低1小时</a>"
       }
     ]
     let DnsSelectorInnerHTML = '';
@@ -453,6 +470,7 @@
       elemRadio = {
         'DnsName': {
           'alidns': document.getElementById('alidns'),
+          'tencentcloud': document.getElementById('tencentcloud'),
           'dnspod': document.getElementById('dnspod'),
           'cloudflare': document.getElementById('cloudflare'),
           'huaweicloud': document.getElementById('huaweicloud'),
@@ -462,6 +480,7 @@
           'godaddy': document.getElementById('godaddy'),
           'googledomain': document.getElementById('googledomain'),
           'namecheap': document.getElementById('namecheap'),
+          'namesilo': document.getElementById('namesilo'),
         },
         'Ipv4GetType': {
           'url': document.getElementById('urlRadioIpv4'),
@@ -478,9 +497,9 @@
       document.getElementById('NotAllowWanAccess').checked = "{{.NotAllowWanAccess}}" == 'on';
       document.getElementById('Username').value = "{{.Username}}";
       document.getElementById('Password').value = "{{.Password}}";
-      document.getElementById('WebhookDisable').checked = "{{.WebhookDisable}}" == 'on';
       document.getElementById('WebhookURL').value = "{{.WebhookURL}}";
       document.getElementById('WebhookRequestBody').value = "{{.WebhookRequestBody}}";
+      document.getElementById('WebhookHeaders').value = "{{.WebhookHeaders}}";
     });
 
     let beforeDnsID = "";
@@ -524,7 +543,10 @@
       document.getElementsByName("DnsName").forEach(e => e.addEventListener('click', e => {
         const dnsInfo = dnsProviders.find(d => d.id == e.target.value);
         const dnsIDElem = document.getElementById('DnsID');
-        dnsIDElem.disabled = !(dnsInfo.idLabel);
+
+        // idLabel 为空时隐藏 DnsID
+        dnsIDElem.hidden = !(dnsInfo.idLabel);
+
         if (dnsInfo.idLabel) {
           dnsIDElem.value ||= beforeDnsID;
         } else {
@@ -775,14 +797,19 @@
   </script>
   <script>
     window.addEventListener('load', () => {
-      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      const theme = localStorage.getItem('theme') ??
+        (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+
+      if (theme === 'dark') {
         toggleTheme()
       }
+      
       document.getElementById('webhookTestBtn').addEventListener('click', e => {
         e.preventDefault();
         const formData = new FormData();
         formData.append("URL", document.getElementById('WebhookURL').value)
         formData.append("RequestBody", document.getElementById('WebhookRequestBody').value)
+        formData.append("WebhookHeaders", document.getElementById('WebhookHeaders').value)
         fetch('./webhookTest', {
           method: 'POST',
           body: formData
@@ -800,12 +827,15 @@
   </script>
 
   <script>
-    function toggleTheme() {
+    function toggleTheme(write = false) {
       const docEle = document.documentElement
-      if (docEle.getAttribute('data-theme') === 'dark')
+      if (docEle.getAttribute('data-theme') === 'dark') {
         docEle.removeAttribute('data-theme')
-      else
+        write && localStorage.setItem('theme', 'light')
+      } else {
         docEle.setAttribute('data-theme', 'dark')
+        write && localStorage.setItem('theme', 'dark')
+      }
     }
 
     function showHideLogs() {

@@ -231,7 +231,7 @@ func (conf *DnsConfig) getAddrFromCmd(addrType string) string {
 		if err != nil {
 			execCmd = exec.Command("sh", "-c", cmd)
 		} else {
-			execCmd = exec.Command("bash", "-rc", cmd)
+			execCmd = exec.Command("bash", "-c", cmd)
 		}
 	}
 	// run cmd
@@ -262,8 +262,10 @@ func (conf *DnsConfig) GetIpv4Addr() string {
 	case "cmd":
 		// 从命令行获取 IP
 		return conf.getAddrFromCmd("IPv4")
+	default:
+		log.Println("IPv4 的 获取 IP 方式 未知！")
+		return "" // unknown type
 	}
-	return "" // unknown type
 }
 
 func (conf *DnsConfig) getIpv6AddrFromInterface() string {
@@ -352,6 +354,8 @@ func (conf *DnsConfig) GetIpv6Addr() (result string) {
 	case "cmd":
 		// 从命令行获取 IP
 		return conf.getAddrFromCmd("IPv6")
+	default:
+		log.Println("IPv6 的 获取 IP 方式 未知！")
+		return "" // unknown type
 	}
-	return "" // unknown type
 }

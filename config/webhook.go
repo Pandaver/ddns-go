@@ -13,9 +13,9 @@ import (
 
 // Webhook Webhook
 type Webhook struct {
-	WebhookDisable     bool
 	WebhookURL         string
 	WebhookRequestBody string
+	WebhookHeaders     string
 }
 
 // updateStatusType 更新状态
@@ -30,12 +30,17 @@ const (
 	UpdatedSuccess = "成功"
 )
 
+// hasJSONPrefix returns true if the string starts with a JSON open brace.
+func hasJSONPrefix(s string) bool {
+	return strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[")
+}
+
 // ExecWebhook 添加或更新IPv4/IPv6记录, 返回是否有更新失败的
 func ExecWebhook(domains *Domains, conf *Config) (v4Status updateStatusType, v6Status updateStatusType) {
 	v4Status = getDomainsStatus(domains.Ipv4Domains)
 	v6Status = getDomainsStatus(domains.Ipv6Domains)
 
-	if !conf.WebhookDisable && conf.WebhookURL != "" && (v4Status != UpdatedNothing || v6Status != UpdatedNothing) {
+	if conf.WebhookURL != "" && (v4Status != UpdatedNothing || v6Status != UpdatedNothing) {
 		// 成功和失败都要触发webhook
 		method := "GET"
 		postPara := ""
@@ -45,6 +50,9 @@ func ExecWebhook(domains *Domains, conf *Config) (v4Status updateStatusType, v6S
 			postPara = replacePara(domains, conf.WebhookRequestBody, v4Status, v6Status)
 			if json.Valid([]byte(postPara)) {
 				contentType = "application/json"
+			// 如果 RequestBody 的 JSON 无效但前缀为 JSON 括号则为 JSON
+			} else if hasJSONPrefix(postPara) {
+				log.Println("RequestBody 的 JSON 无效！")
 			}
 		}
 		requestURL := replacePara(domains, conf.WebhookURL, v4Status, v6Status)
@@ -57,6 +65,11 @@ func ExecWebhook(domains *Domains, conf *Config) (v4Status updateStatusType, v6S
 		if err != nil {
 			log.Println("创建Webhook请求异常, Err:", err)
 			return
+		}
+
+		headers := checkParseHeaders(conf.WebhookHeaders)
+		for key, value := range headers {
+			req.Header.Add(key, value)
 		}
 		req.Header.Add("content-type", contentType)
 
@@ -116,4 +129,21 @@ func getDomainsStr(domains []*Domain) string {
 	}
 
 	return str
+}
+
+func checkParseHeaders(headerStr string) (headers map[string]string) {
+	headers = make(map[string]string)
+	headerArr := strings.Split(headerStr, "\r\n")
+	for _, headerStr := range headerArr {
+		headerStr = strings.TrimSpace(headerStr)
+		if headerStr != "" {
+			parts := strings.Split(headerStr, ":")
+			if len(parts) != 2 {
+				log.Println(headerStr, "Header不正确")
+				continue
+			}
+			headers[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
+	return headers
 }

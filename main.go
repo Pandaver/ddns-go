@@ -16,15 +16,26 @@ import (
 	"github.com/jeessy2/ddns-go/v5/config"
 	"github.com/jeessy2/ddns-go/v5/dns"
 	"github.com/jeessy2/ddns-go/v5/util"
+	"github.com/jeessy2/ddns-go/v5/util/update"
 	"github.com/jeessy2/ddns-go/v5/web"
 	"github.com/kardianos/service"
 )
+
+// ddns-go 版本
+// ddns-go version
+var versionFlag = flag.Bool("v", false, "ddns-go 版本")
+
+// 更新 ddns-go
+var updateFlag = flag.Bool("u", false, "更新 ddns-go")
 
 // 监听地址
 var listen = flag.String("l", ":9876", "监听地址")
 
 // 更新频率(秒)
 var every = flag.Int("f", 300, "同步间隔时间(秒)")
+
+// 缓存次数
+var ipCacheTimes = flag.Int("cacheTimes", 5, "间隔N次与服务商比对")
 
 // 服务管理
 var serviceType = flag.String("s", "", "服务管理, 支持install, uninstall")
@@ -38,20 +49,28 @@ var noWebService = flag.Bool("noweb", false, "不启动 web 服务")
 // 跳过验证证书
 var skipVerify = flag.Bool("skipVerify", false, "跳过验证证书, 适合不能升级的老系统")
 
+// 自定义 DNS 服务器
+var customDNSServer = flag.String("dns", "", "自定义 DNS 服务器（例如 1.1.1.1）")
+
 //go:embed static
-var staticEmbededFiles embed.FS
+var staticEmbeddedFiles embed.FS
 
 //go:embed favicon.ico
-var faviconEmbededFile embed.FS
+var faviconEmbeddedFile embed.FS
 
 // version
 var version = "DEV"
 
-// buildTime
-var buildTime = ""
-
 func main() {
 	flag.Parse()
+	if *versionFlag {
+		fmt.Println(version)
+		return
+	}
+	if *updateFlag {
+		update.Self(version)
+		return
+	}
 	if _, err := net.ResolveTCPAddr("tcp", *listen); err != nil {
 		log.Fatalf("解析监听地址异常，%s", err)
 	}
@@ -61,8 +80,12 @@ func main() {
 		os.Setenv(util.ConfigFilePathENV, absPath)
 	}
 	if *skipVerify {
-		os.Setenv(util.SkipVerifyENV, "true")
+		util.SetInsecureSkipVerify()
 	}
+	if *customDNSServer != "" {
+		util.NewDialerResolver(*customDNSServer + ":53")
+	}
+	os.Setenv(util.IPCacheTimesENV, strconv.Itoa(*ipCacheTimes))
 	switch *serviceType {
 	case "install":
 		installService()
@@ -70,7 +93,7 @@ func main() {
 		uninstallService()
 	default:
 		if util.IsRunInDocker() {
-			run(10 * time.Second)
+			run()
 		} else {
 			s := getService()
 			status, _ := s.Status()
@@ -85,18 +108,16 @@ func main() {
 				default:
 					log.Println("可使用 sudo ./ddns-go -s install 安装服务运行")
 				}
-				run(20 * time.Second)
+				run()
 			}
 		}
 	}
 }
 
-func run(firstDelay time.Duration) {
-	// 第一次运行判断是否已设置过帐号密码
-	conf, err := config.GetConfigCached()
+func run() {
+	// 兼容v5.0.0之前的配置文件
+	conf, _ := config.GetConfigCached()
 	conf.CompatibleConfig()
-	savedPwdOnStart := err == nil && conf.Username != "" && conf.Password != ""
-	os.Setenv(web.SavedPwdOnStartEnv, strconv.FormatBool(savedPwdOnStart))
 
 	if !*noWebService {
 		go func() {
@@ -111,15 +132,15 @@ func run(firstDelay time.Duration) {
 	}
 
 	// 定时运行
-	dns.RunTimer(firstDelay, time.Duration(*every)*time.Second)
+	dns.RunTimer(time.Duration(*every) * time.Second)
 }
 
 func staticFsFunc(writer http.ResponseWriter, request *http.Request) {
-	http.FileServer(http.FS(staticEmbededFiles)).ServeHTTP(writer, request)
+	http.FileServer(http.FS(staticEmbeddedFiles)).ServeHTTP(writer, request)
 }
 
 func faviconFsFunc(writer http.ResponseWriter, request *http.Request) {
-	http.FileServer(http.FS(faviconEmbededFile)).ServeHTTP(writer, request)
+	http.FileServer(http.FS(faviconEmbeddedFile)).ServeHTTP(writer, request)
 }
 
 func runWebServer() error {
@@ -156,8 +177,7 @@ func (p *program) Start(s service.Service) error {
 	return nil
 }
 func (p *program) run() {
-	// 服务运行，延时20秒运行，等待网络
-	run(20 * time.Second)
+	run()
 }
 func (p *program) Stop(s service.Service) error {
 	// Stop should not block. Return with a few seconds.
@@ -166,16 +186,28 @@ func (p *program) Stop(s service.Service) error {
 
 func getService() service.Service {
 	options := make(service.KeyValue)
-	if service.ChosenSystem().String() == "unix-systemv" {
+	var depends []string
+
+	// 确保服务等待网络就绪后再启动
+	switch service.ChosenSystem().String() {
+	case "unix-systemv":
 		options["SysvScript"] = sysvScript
+	case "windows-service":
+		// 将 Windows 服务的启动类型设为自动(延迟启动)
+		options["DelayedAutoStart"] = true
+	default:
+		// 向 Systemd 添加网络依赖
+		depends = append(depends, "Requires=network.target",
+			"After=network-online.target")
 	}
 
 	svcConfig := &service.Config{
-		Name:        "ddns-go",
-		DisplayName: "ddns-go",
-		Description: "简单好用的DDNS。自动更新域名解析到公网IP(支持阿里云、腾讯云dnspod、Cloudflare、Callback、华为云、百度云、Porkbun、GoDaddy、Google Domain)",
-		Arguments:   []string{"-l", *listen, "-f", strconv.Itoa(*every), "-c", *configFilePath},
-		Option:      options,
+		Name:         "ddns-go",
+		DisplayName:  "ddns-go",
+		Description:  "简单好用的DDNS。自动更新域名解析到公网IP(支持阿里云、腾讯云dnspod、Cloudflare、Callback、华为云、百度云、Porkbun、GoDaddy、Google Domain)",
+		Arguments:    []string{"-l", *listen, "-f", strconv.Itoa(*every), "-cacheTimes", strconv.Itoa(*ipCacheTimes), "-c", *configFilePath},
+		Dependencies: depends,
+		Option:       options,
 	}
 
 	if *noWebService {
@@ -184,6 +216,10 @@ func getService() service.Service {
 
 	if *skipVerify {
 		svcConfig.Arguments = append(svcConfig.Arguments, "-skipVerify")
+	}
+
+	if *customDNSServer != "" {
+		svcConfig.Arguments = append(svcConfig.Arguments, "-dns", *customDNSServer)
 	}
 
 	prg := &program{}
